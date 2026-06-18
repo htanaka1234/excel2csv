@@ -239,10 +239,14 @@ function Test-DockerImageCurrent {
 }
 
 $SourceFingerprint = Get-SourceFingerprint
+Write-Host "Checking Docker image $Image..."
 if (-not (Test-DockerImageCurrent -ImageName $Image -SourceFingerprint $SourceFingerprint)) {
     $BuildContext = Convert-ToDockerPath -Path $ProjectRoot
     Write-Host "Building Docker image $Image for source fingerprint $SourceFingerprint."
     Invoke-DockerChecked -DockerArgs @("build", "--build-arg", "EXCEL2CSV_IMAGE_FINGERPRINT=$SourceFingerprint", "-t", $Image, $BuildContext)
+}
+else {
+    Write-Host "Docker image $Image is up to date."
 }
 
 $OutputMount = Convert-ToDockerPath -Path $OutputDirPath
@@ -286,5 +290,6 @@ if ($ShouldAskPassword -and -not $Password -and -not $env:EXCEL2CSV_PASSWORD) {
     $DockerArgs += "--ask-password"
 }
 
+Write-Host "Starting conversion for $($ResolvedInputs.Count) input path(s)..."
 Invoke-DockerChecked -DockerArgs $DockerArgs
 Write-Host "Wrote $OutputFullPath"

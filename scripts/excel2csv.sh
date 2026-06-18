@@ -112,9 +112,12 @@ image_fingerprint() {
 
 source_hash="$(source_fingerprint)"
 image_hash="$(image_fingerprint)"
+printf 'Checking Docker image %s...\n' "${IMAGE}" >&2
 if [[ -z "${image_hash}" || "${image_hash}" == "<no value>" || "${image_hash}" != "${source_hash}" ]]; then
   printf 'Building Docker image %s for source fingerprint %s.\n' "${IMAGE}" "${source_hash}" >&2
   docker build --build-arg "EXCEL2CSV_IMAGE_FINGERPRINT=${source_hash}" -t "${IMAGE}" "${PROJECT_ROOT}"
+else
+  printf 'Docker image %s is up to date.\n' "${IMAGE}" >&2
 fi
 
 if [[ -z "${password}" ]]; then
@@ -160,5 +163,6 @@ if [[ "${ask_password}" -eq 1 && -z "${password}" ]]; then
   docker_args+=(--ask-password)
 fi
 
+printf 'Starting conversion for %s input path(s)...\n' "${#inputs[@]}" >&2
 docker "${docker_args[@]}"
 printf 'Wrote %s\n' "${output_abs}"

@@ -134,14 +134,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             password=resolve_password(args.password, args.password_file),
             ask=args.ask_password,
         )
+        print("Scanning input paths...", file=sys.stderr, flush=True)
         input_files = expand_inputs(args.inputs, recursive=args.recursive)
+        print(f"Found {len(input_files):,} workbook(s).", file=sys.stderr, flush=True)
         sheets = load_sheets(
             input_files,
             requested_sheets=args.sheets,
             password_provider=password_provider,
             include_empty_sheets=args.include_empty_sheets,
         )
+        print(f"Merging {len(sheets):,} sheet(s)...", file=sys.stderr, flush=True)
         merged = merge_frames(sheets)
+        print(
+            f"Writing {len(merged):,} row(s) to {args.output}...",
+            file=sys.stderr,
+            flush=True,
+        )
         write_output(merged, args.output, force_gzip=args.gzip)
     except Excel2CsvError as exc:
         parser.exit(2, f"excel2csv: error: {exc}\n")
@@ -209,7 +217,14 @@ def load_sheets(
     include_empty_sheets: bool,
 ) -> list[SheetFrame]:
     sheet_frames: list[SheetFrame] = []
-    for workbook in input_files:
+    input_file_list = list(input_files)
+    workbook_count = len(input_file_list)
+    for workbook_index, workbook in enumerate(input_file_list, start=1):
+        print(
+            f"[{workbook_index}/{workbook_count}] Opening {workbook}...",
+            file=sys.stderr,
+            flush=True,
+        )
         source = open_workbook_source(workbook, password_provider=password_provider)
         engine = engine_for(workbook)
         try:
@@ -219,7 +234,14 @@ def load_sheets(
                     excel_file.sheet_names,
                     requested_sheets=requested_sheets,
                 )
-                for sheet_name in sheet_names:
+                sheet_count = len(sheet_names)
+                for sheet_index, sheet_name in enumerate(sheet_names, start=1):
+                    print(
+                        f"[{workbook_index}/{workbook_count}] "
+                        f"Reading sheet {sheet_index}/{sheet_count}: {sheet_name}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     frame = pd.read_excel(
                         excel_file,
                         sheet_name=sheet_name,
@@ -229,6 +251,12 @@ def load_sheets(
                     if frame.empty and len(frame.columns) == 0 and not include_empty_sheets:
                         continue
                     validate_unique_columns(workbook, sheet_name, frame.columns)
+                    print(
+                        f"[{workbook_index}/{workbook_count}] "
+                        f"Loaded {len(frame):,} row(s) from {sheet_name}.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     sheet_frames.append(
                         SheetFrame(
                             workbook=workbook,
