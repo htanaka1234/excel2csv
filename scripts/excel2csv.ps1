@@ -46,7 +46,7 @@ if (-not $Password -and -not $env:EXCEL2CSV_PASSWORD) {
     }
 }
 
-function Invoke-NativeQuiet {
+function Invoke-NativeCapture {
     param(
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
@@ -56,22 +56,39 @@ function Invoke-NativeQuiet {
     $PreviousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & $FilePath @ArgumentList *> $null
-        return $LASTEXITCODE
+        $Output = & $FilePath @ArgumentList 2>$null
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output = ($Output -join "`n")
+        }
     }
     catch {
-        return 1
+        return [pscustomobject]@{
+            ExitCode = 1
+            Output = ""
+        }
     }
     finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
     }
 }
 
+function Invoke-NativeQuiet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$ArgumentList = @()
+    )
+
+    $Result = Invoke-NativeCapture -FilePath $FilePath -ArgumentList $ArgumentList
+    return $Result.ExitCode
+}
+
 function Test-DockerCommand {
     param([switch]$UseWsl)
 
     if ($UseWsl) {
-        $ExitCode = Invoke-NativeQuiet -FilePath "wsl" -ArgumentList @("docker", "version")
+        $ExitCode = Invoke-NativeQuiet -FilePath "wsl.exe" -ArgumentList @("--exec", "docker", "version")
     }
     else {
         $ExitCode = Invoke-NativeQuiet -FilePath "docker" -ArgumentList @("version")
@@ -84,7 +101,7 @@ $UseWslDocker = $false
 if (Test-DockerCommand) {
     Write-Host "Using Docker from this shell."
 }
-elseif (Get-Command wsl -ErrorAction SilentlyContinue) {
+elseif (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
     if (Test-DockerCommand -UseWsl) {
         $UseWslDocker = $true
         Write-Host "Using Docker through WSL."
@@ -101,11 +118,12 @@ function Convert-ToDockerPath {
     param([string]$Path)
 
     if ($UseWslDocker) {
-        $Converted = & wsl wslpath -a $Path
-        if ($LASTEXITCODE -ne 0) {
+        $Result = Invoke-NativeCapture -FilePath "wsl.exe" -ArgumentList @("--exec", "wslpath", "-u", "-a", $Path)
+        $Converted = $Result.Output.Trim()
+        if ($Result.ExitCode -ne 0 -or -not $Converted) {
             throw "Could not convert path for WSL Docker: $Path"
         }
-        return $Converted.Trim()
+        return $Converted
     }
     return $Path
 }
@@ -114,7 +132,7 @@ function Invoke-DockerChecked {
     param([string[]]$DockerArgs)
 
     if ($UseWslDocker) {
-        & wsl docker @DockerArgs
+        & wsl.exe --exec docker @DockerArgs
     }
     else {
         & docker @DockerArgs
@@ -129,7 +147,7 @@ function Test-DockerImage {
     param([string]$ImageName)
 
     if ($UseWslDocker) {
-        $ExitCode = Invoke-NativeQuiet -FilePath "wsl" -ArgumentList @("docker", "image", "inspect", $ImageName)
+        $ExitCode = Invoke-NativeQuiet -FilePath "wsl.exe" -ArgumentList @("--exec", "docker", "image", "inspect", $ImageName)
     }
     else {
         $ExitCode = Invoke-NativeQuiet -FilePath "docker" -ArgumentList @("image", "inspect", $ImageName)
