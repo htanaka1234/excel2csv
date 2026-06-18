@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "excel2csv"
+version = "0.1.0"
+description = "Merge one or more Excel workbooks and sheets into one CSV or CSV.GZ."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "excel2csv contributors" }
+]
+dependencies = [
+  "msoffcrypto-tool>=5.4,<6",
+  "openpyxl>=3.1,<4",
+  "pandas>=2.2,<3",
+  "pyxlsb>=1.0,<2",
+  "xlrd>=2.0,<3"
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9"
+]
+
+[project.scripts]
+excel2csv = "excel2csv.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/excel2csv"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
