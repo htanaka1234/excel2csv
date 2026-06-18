@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/excel2csv.sh [--gzip] [-o OUTPUT] [--password PASSWORD] INPUT...
+  scripts/excel2csv.sh [--gzip] [--ask-password] [-o OUTPUT] [--password PASSWORD] INPUT...
 
 Examples:
   scripts/excel2csv.sh -o out/merged.csv data/a.xlsx data/b.xlsx
@@ -17,6 +17,7 @@ USAGE
 }
 
 gzip_output=0
+ask_password=0
 output=""
 password="${EXCEL2CSV_PASSWORD:-}"
 inputs=()
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --gzip)
       gzip_output=1
+      shift
+      ;;
+    --ask-password)
+      ask_password=1
       shift
       ;;
     -o|--output)
@@ -82,7 +87,18 @@ if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   docker build -t "${IMAGE}" "${PROJECT_ROOT}"
 fi
 
-docker_args=(run --rm -v "${output_dir}:/output")
+if [[ -z "${password}" ]]; then
+  ask_password=1
+fi
+
+docker_args=(run --rm)
+if [[ "${ask_password}" -eq 1 ]]; then
+  docker_args+=(-i)
+  if [[ -t 0 && -t 1 ]]; then
+    docker_args+=(-t)
+  fi
+fi
+docker_args+=(-v "${output_dir}:/output")
 container_inputs=()
 
 for index in "${!inputs[@]}"; do
@@ -108,6 +124,10 @@ docker_args+=(-o "/output/${output_name}")
 
 if [[ "${gzip_output}" -eq 1 ]]; then
   docker_args+=(--gzip)
+fi
+
+if [[ "${ask_password}" -eq 1 && -z "${password}" ]]; then
+  docker_args+=(--ask-password)
 fi
 
 docker "${docker_args[@]}"

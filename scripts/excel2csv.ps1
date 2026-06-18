@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$Gzip,
+    [switch]$AskPassword,
     [string]$Output,
     [string]$Password,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -33,18 +34,7 @@ $OutputDirPath = Split-Path -Parent $OutputFullPath
 $OutputName = Split-Path -Leaf $OutputFullPath
 New-Item -ItemType Directory -Force -Path $OutputDirPath | Out-Null
 
-if (-not $Password -and -not $env:EXCEL2CSV_PASSWORD) {
-    $SecurePassword = Read-Host "Password for encrypted workbooks (blank for none)" -AsSecureString
-    if ($SecurePassword.Length -gt 0) {
-        $Bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
-        try {
-            $Password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Bstr)
-        }
-        finally {
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Bstr)
-        }
-    }
-}
+$ShouldAskPassword = $AskPassword -or (-not $Password -and -not $env:EXCEL2CSV_PASSWORD)
 
 function Invoke-NativeCapture {
     param(
@@ -162,7 +152,14 @@ if (-not (Test-DockerImage -ImageName $Image)) {
 }
 
 $OutputMount = Convert-ToDockerPath -Path $OutputDirPath
-$DockerArgs = @("run", "--rm", "-v", "${OutputMount}:/output")
+$DockerArgs = @("run", "--rm")
+if ($ShouldAskPassword) {
+    $DockerArgs += "-i"
+    if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+        $DockerArgs += "-t"
+    }
+}
+$DockerArgs += @("-v", "${OutputMount}:/output")
 $ContainerInputs = @()
 
 for ($Index = 0; $Index -lt $ResolvedInputs.Count; $Index++) {
@@ -189,6 +186,10 @@ $DockerArgs += @("-o", "/output/$OutputName")
 
 if ($Gzip) {
     $DockerArgs += "--gzip"
+}
+
+if ($ShouldAskPassword -and -not $Password -and -not $env:EXCEL2CSV_PASSWORD) {
+    $DockerArgs += "--ask-password"
 }
 
 Invoke-DockerChecked -DockerArgs $DockerArgs

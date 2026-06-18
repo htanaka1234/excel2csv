@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import gzip
 import io
 import os
@@ -34,6 +35,32 @@ class SheetFrame:
     workbook: Path
     sheet_name: str
     frame: pd.DataFrame
+
+
+@dataclass
+class PasswordProvider:
+    password: str | None
+    ask: bool = False
+
+    def get_password(self, workbook: Path) -> str:
+        if self.password is not None:
+            return self.password
+        if not self.ask:
+            raise Excel2CsvError(
+                f"{workbook} is encrypted; pass --password, --password-file, "
+                "EXCEL2CSV_PASSWORD, or --ask-password"
+            )
+
+        try:
+            self.password = getpass.getpass(
+                f"Password for encrypted workbook {workbook}: "
+            )
+        except (EOFError, OSError) as exc:
+            raise Excel2CsvError(
+                f"{workbook} is encrypted but no interactive password could be read; "
+                "pass --password, --password-file, or EXCEL2CSV_PASSWORD"
+            ) from exc
+        return self.password
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read the workbook password from the first line of this file.",
     )
     parser.add_argument(
+        "--ask-password",
+        action="store_true",
+        help="Prompt interactively for the password only when an encrypted workbook is found.",
+    )
+    parser.add_argument(
         "--sheet",
         action="append",
         dest="sheets",
@@ -98,12 +130,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        password = resolve_password(args.password, args.password_file)
+        password_provider = PasswordProvider(
+            password=resolve_password(args.password, args.password_file),
+            ask=args.ask_password,
+        )
         input_files = expand_inputs(args.inputs, recursive=args.recursive)
         sheets = load_sheets(
             input_files,
             requested_sheets=args.sheets,
-            password=password,
+            password_provider=password_provider,
             include_empty_sheets=args.include_empty_sheets,
         )
         merged = merge_frames(sheets)
@@ -120,8 +155,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def resolve_password(password: str | None, password_file: Path | None) -> str | None:
-    if password and password_file:
+    if password is not None and password_file:
         raise Excel2CsvError("use either --password or --password-file, not both")
+
+    if password is not None:
+        return password
 
     if password_file:
         try:
@@ -131,7 +169,7 @@ def resolve_password(password: str | None, password_file: Path | None) -> str | 
         except OSError as exc:
             raise Excel2CsvError(f"cannot read password file {password_file}: {exc}") from exc
 
-    return password or os.environ.get("EXCEL2CSV_PASSWORD") or None
+    return os.environ.get("EXCEL2CSV_PASSWORD") or None
 
 
 def expand_inputs(inputs: Iterable[Path], *, recursive: bool) -> list[Path]:
@@ -167,12 +205,12 @@ def load_sheets(
     input_files: Iterable[Path],
     *,
     requested_sheets: Sequence[str] | None,
-    password: str | None,
+    password_provider: PasswordProvider,
     include_empty_sheets: bool,
 ) -> list[SheetFrame]:
     sheet_frames: list[SheetFrame] = []
     for workbook in input_files:
-        source = open_workbook_source(workbook, password=password)
+        source = open_workbook_source(workbook, password_provider=password_provider)
         engine = engine_for(workbook)
         try:
             with pd.ExcelFile(source, engine=engine) as excel_file:
@@ -208,17 +246,17 @@ def load_sheets(
     return sheet_frames
 
 
-def open_workbook_source(path: Path, *, password: str | None) -> Path | BinaryIO:
+def open_workbook_source(
+    path: Path,
+    *,
+    password_provider: PasswordProvider,
+) -> Path | BinaryIO:
     try:
         with path.open("rb") as file_obj:
             office_file = msoffcrypto.OfficeFile(file_obj)
             if not office_file.is_encrypted():
                 return path
-            if not password:
-                raise Excel2CsvError(
-                    f"{path} is encrypted; pass --password, --password-file, "
-                    "or EXCEL2CSV_PASSWORD"
-                )
+            password = password_provider.get_password(path)
             decrypted = io.BytesIO()
             office_file.load_key(password=password)
             office_file.decrypt(decrypted)

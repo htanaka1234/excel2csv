@@ -5,8 +5,8 @@ import gzip
 import pandas as pd
 import pytest
 
-from excel2csv.cli import Excel2CsvError, main, merge_frames
-from excel2csv.cli import SheetFrame
+from excel2csv import cli
+from excel2csv.cli import Excel2CsvError, PasswordProvider, SheetFrame, main, merge_frames
 
 
 def write_workbook(path, sheets):
@@ -69,3 +69,53 @@ def test_rejects_mismatched_columns(tmp_path):
 
     with pytest.raises(Excel2CsvError, match="column mismatch"):
         merge_frames([first, second])
+
+
+def test_prompts_for_password_when_encrypted_workbook_is_found(tmp_path, monkeypatch):
+    workbook = tmp_path / "protected.xlsx"
+    workbook.write_bytes(b"encrypted")
+    seen_passwords = []
+
+    class FakeOfficeFile:
+        def __init__(self, file_obj):
+            pass
+
+        def is_encrypted(self):
+            return True
+
+        def load_key(self, password):
+            seen_passwords.append(password)
+
+        def decrypt(self, decrypted):
+            decrypted.write(b"decrypted")
+
+    monkeypatch.setattr(cli.msoffcrypto, "OfficeFile", FakeOfficeFile)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "secret")
+
+    source = cli.open_workbook_source(
+        workbook,
+        password_provider=PasswordProvider(password=None, ask=True),
+    )
+
+    assert source.read() == b"decrypted"
+    assert seen_passwords == ["secret"]
+
+
+def test_requires_password_source_for_encrypted_workbook(tmp_path, monkeypatch):
+    workbook = tmp_path / "protected.xlsx"
+    workbook.write_bytes(b"encrypted")
+
+    class FakeOfficeFile:
+        def __init__(self, file_obj):
+            pass
+
+        def is_encrypted(self):
+            return True
+
+    monkeypatch.setattr(cli.msoffcrypto, "OfficeFile", FakeOfficeFile)
+
+    with pytest.raises(Excel2CsvError, match="--ask-password"):
+        cli.open_workbook_source(
+            workbook,
+            password_provider=PasswordProvider(password=None, ask=False),
+        )
