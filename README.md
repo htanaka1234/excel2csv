@@ -39,7 +39,7 @@ scripts/excel2csv.sh --ask-password -o out/merged.csv data/protected.xlsx
 EXCEL2CSV_PASSWORD='secret' scripts/excel2csv.sh -o out/merged.csv data/protected.xlsx
 ```
 
-初回実行時に `excel2csv:local` Docker イメージを build します。
+初回実行時、またはソースに対応する Docker image fingerprint が古い場合に、`excel2csv:local` Docker イメージを自動 build します。
 
 ## Docker CLI を直接使う
 

@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Image = if ($env:EXCEL2CSV_IMAGE) { $env:EXCEL2CSV_IMAGE } else { "excel2csv:local" }
 $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).ProviderPath
+$FingerprintLabel = "org.opencontainers.image.source-fingerprint"
 
 if (-not $InputPaths -or $InputPaths.Count -eq 0) {
     throw "Drop one or more Excel files onto excel2csv.cmd, or pass input paths."
@@ -133,22 +134,111 @@ function Invoke-DockerChecked {
     }
 }
 
-function Test-DockerImage {
-    param([string]$ImageName)
+function Get-ProjectRelativePath {
+    param([string]$Path)
 
-    if ($UseWslDocker) {
-        $ExitCode = Invoke-NativeQuiet -FilePath "wsl.exe" -ArgumentList @("--exec", "docker", "image", "inspect", $ImageName)
-    }
-    else {
-        $ExitCode = Invoke-NativeQuiet -FilePath "docker" -ArgumentList @("image", "inspect", $ImageName)
+    $FullPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $PathSeparators = [char[]]@([char]92, [char]47)
+    $Root = $ProjectRoot.TrimEnd($PathSeparators)
+    if (-not $FullPath.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is outside project root: $Path"
     }
 
-    return $ExitCode -eq 0
+    return $FullPath.Substring($Root.Length).TrimStart($PathSeparators).Replace("\", "/")
 }
 
-if (-not (Test-DockerImage -ImageName $Image)) {
+function Test-FingerprintFile {
+    param([string]$RelativePath)
+
+    return $RelativePath -notmatch "(^|/)__pycache__/" -and $RelativePath -notmatch "\.pyc$"
+}
+
+function Get-SourceFingerprint {
+    $RelativePaths = New-Object System.Collections.Generic.List[string]
+
+    foreach ($RelativePath in @("Dockerfile", "pyproject.toml", "README.md")) {
+        $FullPath = Join-Path $ProjectRoot $RelativePath
+        if (Test-Path -LiteralPath $FullPath -PathType Leaf) {
+            $RelativePaths.Add($RelativePath)
+        }
+    }
+
+    foreach ($Directory in @("src", "tests")) {
+        $FullDirectory = Join-Path $ProjectRoot $Directory
+        if (Test-Path -LiteralPath $FullDirectory -PathType Container) {
+            foreach ($File in Get-ChildItem -LiteralPath $FullDirectory -File -Recurse) {
+                $RelativePath = Get-ProjectRelativePath -Path $File.FullName
+                if (Test-FingerprintFile -RelativePath $RelativePath) {
+                    $RelativePaths.Add($RelativePath)
+                }
+            }
+        }
+    }
+
+    $SortedPaths = $RelativePaths.ToArray()
+    [System.Array]::Sort($SortedPaths, [System.StringComparer]::Ordinal)
+
+    $Lines = New-Object System.Collections.Generic.List[string]
+    foreach ($RelativePath in $SortedPaths) {
+        $FullPath = Join-Path $ProjectRoot $RelativePath
+        $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $FullPath).Hash.ToLowerInvariant()
+        $Lines.Add("$RelativePath`t$Hash")
+    }
+
+    $Payload = ([string]::Join("`n", $Lines.ToArray())) + "`n"
+    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Payload)
+    $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $HashBytes = $Sha256.ComputeHash($Bytes)
+        return ([System.BitConverter]::ToString($HashBytes)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $Sha256.Dispose()
+    }
+}
+
+function Get-DockerImageLabel {
+    param(
+        [string]$ImageName,
+        [string]$LabelName
+    )
+
+    $Format = '{{ index .Config.Labels "' + $LabelName + '" }}'
+
+    if ($UseWslDocker) {
+        $Result = Invoke-NativeCapture -FilePath "wsl.exe" -ArgumentList @("--exec", "docker", "image", "inspect", "--format", $Format, $ImageName)
+    }
+    else {
+        $Result = Invoke-NativeCapture -FilePath "docker" -ArgumentList @("image", "inspect", "--format", $Format, $ImageName)
+    }
+
+    if ($Result.ExitCode -ne 0) {
+        return $null
+    }
+
+    $Value = $Result.Output.Trim()
+    if (-not $Value -or $Value -eq "<no value>") {
+        return $null
+    }
+
+    return $Value
+}
+
+function Test-DockerImageCurrent {
+    param(
+        [string]$ImageName,
+        [string]$SourceFingerprint
+    )
+
+    $ImageFingerprint = Get-DockerImageLabel -ImageName $ImageName -LabelName $FingerprintLabel
+    return $ImageFingerprint -eq $SourceFingerprint
+}
+
+$SourceFingerprint = Get-SourceFingerprint
+if (-not (Test-DockerImageCurrent -ImageName $Image -SourceFingerprint $SourceFingerprint)) {
     $BuildContext = Convert-ToDockerPath -Path $ProjectRoot
-    Invoke-DockerChecked -DockerArgs @("build", "-t", $Image, $BuildContext)
+    Write-Host "Building Docker image $Image for source fingerprint $SourceFingerprint."
+    Invoke-DockerChecked -DockerArgs @("build", "--build-arg", "EXCEL2CSV_IMAGE_FINGERPRINT=$SourceFingerprint", "-t", $Image, $BuildContext)
 }
 
 $OutputMount = Convert-ToDockerPath -Path $OutputDirPath

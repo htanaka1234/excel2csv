@@ -2,6 +2,7 @@
 set -euo pipefail
 
 IMAGE="${EXCEL2CSV_IMAGE:-excel2csv:local}"
+FINGERPRINT_LABEL="org.opencontainers.image.source-fingerprint"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -83,8 +84,37 @@ output_dir="$(dirname "${output_abs}")"
 output_name="$(basename "${output_abs}")"
 mkdir -p "${output_dir}"
 
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-  docker build -t "${IMAGE}" "${PROJECT_ROOT}"
+source_fingerprint() {
+  (
+    cd "${PROJECT_ROOT}"
+    {
+      for path in Dockerfile pyproject.toml README.md; do
+        [[ -f "${path}" ]] && printf '%s\n' "${path}"
+      done
+      for dir in src tests; do
+        [[ -d "${dir}" ]] && find "${dir}" -type f \
+          ! -path '*/__pycache__/*' \
+          ! -name '*.pyc' \
+          -print
+      done
+    } | LC_ALL=C sort | while IFS= read -r path; do
+      file_hash="$(sha256sum "${path}" | awk '{print tolower($1)}')"
+      printf '%s\t%s\n' "${path}" "${file_hash}"
+    done | sha256sum | awk '{print $1}'
+  )
+}
+
+image_fingerprint() {
+  docker image inspect \
+    --format "{{ index .Config.Labels \"${FINGERPRINT_LABEL}\" }}" \
+    "${IMAGE}" 2>/dev/null || true
+}
+
+source_hash="$(source_fingerprint)"
+image_hash="$(image_fingerprint)"
+if [[ -z "${image_hash}" || "${image_hash}" == "<no value>" || "${image_hash}" != "${source_hash}" ]]; then
+  printf 'Building Docker image %s for source fingerprint %s.\n' "${IMAGE}" "${source_hash}" >&2
+  docker build --build-arg "EXCEL2CSV_IMAGE_FINGERPRINT=${source_hash}" -t "${IMAGE}" "${PROJECT_ROOT}"
 fi
 
 if [[ -z "${password}" ]]; then
