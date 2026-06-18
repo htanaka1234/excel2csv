@@ -4,7 +4,7 @@ param(
     [switch]$AskPassword,
     [string]$Output,
     [string]$Password,
-    [Parameter(ValueFromRemainingArguments = $true)]
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$InputPaths
 )
 
@@ -13,8 +13,12 @@ $Image = if ($env:EXCEL2CSV_IMAGE) { $env:EXCEL2CSV_IMAGE } else { "excel2csv:lo
 $ProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).ProviderPath
 $FingerprintLabel = "org.opencontainers.image.source-fingerprint"
 
+if ((-not $InputPaths -or $InputPaths.Count -eq 0) -and $args.Count -gt 0) {
+    $InputPaths = @($args)
+}
+
 if (-not $InputPaths -or $InputPaths.Count -eq 0) {
-    throw "Drop one or more Excel files onto excel2csv.cmd, or pass input paths."
+    throw "Drop one or more Excel files onto excel2csv.cmd or excel2csv-gzip.cmd, or pass input paths."
 }
 
 $ResolvedInputs = @()
