@@ -46,21 +46,38 @@ if (-not $Password -and -not $env:EXCEL2CSV_PASSWORD) {
     }
 }
 
+function Invoke-NativeQuiet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$ArgumentList = @()
+    )
+
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $FilePath @ArgumentList *> $null
+        return $LASTEXITCODE
+    }
+    catch {
+        return 1
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+}
+
 function Test-DockerCommand {
     param([switch]$UseWsl)
 
-    try {
-        if ($UseWsl) {
-            & wsl docker version *> $null
-        }
-        else {
-            & docker version *> $null
-        }
-        return $LASTEXITCODE -eq 0
+    if ($UseWsl) {
+        $ExitCode = Invoke-NativeQuiet -FilePath "wsl" -ArgumentList @("docker", "version")
     }
-    catch {
-        return $false
+    else {
+        $ExitCode = Invoke-NativeQuiet -FilePath "docker" -ArgumentList @("version")
     }
+
+    return $ExitCode -eq 0
 }
 
 $UseWslDocker = $false
@@ -112,12 +129,13 @@ function Test-DockerImage {
     param([string]$ImageName)
 
     if ($UseWslDocker) {
-        & wsl docker image inspect $ImageName *> $null
+        $ExitCode = Invoke-NativeQuiet -FilePath "wsl" -ArgumentList @("docker", "image", "inspect", $ImageName)
     }
     else {
-        & docker image inspect $ImageName *> $null
+        $ExitCode = Invoke-NativeQuiet -FilePath "docker" -ArgumentList @("image", "inspect", $ImageName)
     }
-    return $LASTEXITCODE -eq 0
+
+    return $ExitCode -eq 0
 }
 
 if (-not (Test-DockerImage -ImageName $Image)) {
